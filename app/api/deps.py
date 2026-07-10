@@ -2,7 +2,7 @@ from typing import Annotated
 
 import jwt
 from fastapi import Depends, HTTPException, status
-from fastapi.security import OAuth2PasswordBearer
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
@@ -14,7 +14,7 @@ from app.services.users import get_user_by_email
 
 DbSession = Annotated[Session, Depends(get_db_session)]
 
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
+bearer_scheme = HTTPBearer(auto_error=False)
 
 credentials_exception = HTTPException(
     status_code=status.HTTP_401_UNAUTHORIZED,
@@ -25,21 +25,25 @@ credentials_exception = HTTPException(
 
 def get_current_user(
     db: DbSession,
-    token: Annotated[str, Depends(oauth2_scheme)],
+    credentials: Annotated[
+        HTTPAuthorizationCredentials | None,
+        Depends(bearer_scheme),
+    ],
 ) -> User:
     """Get the user identified by a valid access token."""
+    if credentials is None:
+        raise credentials_exception
+
     try:
         payload = jwt.decode(
-            token,
+            credentials.credentials,
             settings.secret_key,
             algorithms=[settings.algorithm],
+            options={"require": ["exp", "sub"]},
         )
         token_data = TokenPayload.model_validate(payload)
     except (jwt.InvalidTokenError, ValidationError) as error:
         raise credentials_exception from error
-
-    if token_data.sub is None:
-        raise credentials_exception
 
     user = get_user_by_email(db, token_data.sub)
     if user is None:

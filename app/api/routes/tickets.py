@@ -9,7 +9,6 @@ from app.services.tickets import (
     create_ticket,
     delete_ticket,
     get_ticket_for_user,
-    get_ticket_or_404,
     list_tickets,
     update_ticket,
 )
@@ -80,6 +79,6 @@ def delete_existing_ticket(
     current_user: CurrentUser,
 ) -> Response:
     """Delete a ticket as an administrator."""
-    ticket = get_ticket_or_404(db, ticket_id)
+    ticket = get_ticket_for_user(db, ticket_id, current_user)
     delete_ticket(db, ticket, current_user)
     return Response(status_code=status.HTTP_204_NO_CONTENT)

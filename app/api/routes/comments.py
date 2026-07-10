@@ -50,6 +50,7 @@ def update_existing_comment(
 ) -> CommentRead:
     """Edit the current user's own comment."""
     comment = get_comment_or_404(db, comment_id)
+    get_ticket_for_user(db, comment.ticket_id, current_user)
     return update_comment(db, comment, comment_data, current_user)
 
 
@@ -61,5 +62,6 @@ def delete_existing_comment(
 ) -> Response:
     """Delete a comment as support staff or an administrator."""
     comment = get_comment_or_404(db, comment_id)
+    get_ticket_for_user(db, comment.ticket_id, current_user)
     delete_comment(db, comment, current_user)
     return Response(status_code=status.HTTP_204_NO_CONTENT)

@@ -1,10 +1,18 @@
 from datetime import datetime
+from typing import Annotated
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, StringConstraints
+
+CommentText = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=5_000),
+]
 
 
 class CommentCreate(BaseModel):
-    text: str = Field(min_length=1, max_length=5_000)
+    model_config = ConfigDict(extra="forbid")
+
+    text: CommentText
 
 
 class CommentRead(BaseModel):
@@ -19,4 +27,6 @@ class CommentRead(BaseModel):
 
 
 class CommentUpdate(BaseModel):
-    text: str = Field(min_length=1, max_length=5_000)
+    model_config = ConfigDict(extra="forbid")
+
+    text: CommentText

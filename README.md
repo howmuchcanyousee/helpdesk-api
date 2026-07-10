@@ -16,6 +16,7 @@ Compose.
 - Docker / Docker Compose
 - pytest
 - ruff
+- GitHub Actions
 
 ## Возможности
 
@@ -47,10 +48,12 @@ docker compose up --build
 Copy-Item .env.example .env
 ```
 
-Перед первым запуском замените значение `SECRET_KEY` в `.env` на длинную
-случайную строку. Docker Compose ожидает готовности PostgreSQL, затем API
-автоматически выполняет `alembic upgrade head` и запускается по адресу
-`http://localhost:8000`.
+Перед первым запуском замените в `.env` placeholder пароля в
+`POSTGRES_PASSWORD` и этот же пароль внутри `DATABASE_URL`, а также значение
+`SECRET_KEY`. Случайный ключ можно создать командой
+`python -c "import secrets; print(secrets.token_urlsafe(48))"`. Docker Compose
+ожидает готовности PostgreSQL, затем API автоматически выполняет
+`alembic upgrade head` и запускается по адресу `http://localhost:8000`.
 
 Swagger UI: [http://localhost:8000/docs](http://localhost:8000/docs)
 
@@ -74,7 +77,7 @@ curl http://localhost:8000/health
 | --- | --- |
 | `APP_NAME` | Название приложения в документации FastAPI. |
 | `APP_ENV` | Окружение запуска, например `development`. |
-| `DEBUG` | Режим отладки FastAPI: `true` или `false`. |
+| `APP_DEBUG` | Режим отладки FastAPI: `true` или `false`. |
 | `POSTGRES_DB` | Имя базы данных, создаваемой контейнером PostgreSQL. |
 | `POSTGRES_USER` | Пользователь PostgreSQL. |
 | `POSTGRES_PASSWORD` | Пароль PostgreSQL для локального окружения. |
@@ -86,21 +89,37 @@ curl http://localhost:8000/health
 ## Миграции
 
 В Docker миграции применяются автоматически при запуске API. Для ручной работы
-с Alembic используйте:
+с Alembic используйте команды внутри контейнера, где hostname `db` доступен:
 
 ```bash
 # Создать миграцию после изменения SQLAlchemy-моделей
-alembic revision --autogenerate -m "describe_change"
+docker compose exec api alembic revision --autogenerate -m "describe_change"
 
 # Применить все миграции
-alembic upgrade head
-```
-
-Если API уже запущен в Docker:
-
-```bash
 docker compose exec api alembic upgrade head
 ```
+
+## Демонстрационные данные
+
+Команда seed создаёт пользователей, две заявки и комментарии только для
+локальной разработки. Она не запускается при старте API и завершается с ошибкой,
+если `APP_ENV` отличается от `development` или `test`.
+
+В `.env.example` заданы исключительно локальные dev-пароли. Перед запуском при
+необходимости замените `SEED_ADMIN_PASSWORD`, `SEED_SUPPORT_PASSWORD` и
+`SEED_USER_PASSWORD` в своём `.env`, затем выполните:
+
+```bash
+docker compose exec api python -m app.scripts.seed
+```
+
+Повторный запуск не создаёт дубликаты и не перезаписывает существующие аккаунты.
+
+| Пользователь | Роль | Пароль из `.env.example` |
+| --- | --- | --- |
+| `admin@example.com` | `admin` | `local-admin-password` |
+| `support@example.com` | `support` | `local-support-password` |
+| `user@example.com` | `user` | `local-user-password` |
 
 ## Тесты
 
@@ -120,9 +139,13 @@ pytest
 используется изолированная SQLite БД в памяти. Для отдельной PostgreSQL БД:
 
 ```powershell
-$env:TEST_DATABASE_URL = "postgresql+psycopg://helpdesk:helpdesk@localhost:5432/helpdesk_test"
+docker compose exec db createdb -U helpdesk helpdesk_test
+$env:TEST_DATABASE_URL = "postgresql+psycopg://helpdesk:<password>@localhost:5432/helpdesk_test"
 pytest
 ```
+
+Защитная проверка не позволяет тестам очищать PostgreSQL-БД, имя которой не
+заканчивается на `_test`.
 
 Проверки стиля:
 
@@ -130,6 +153,19 @@ pytest
 ruff check .
 ruff format --check .
 ```
+
+Установка Git hooks:
+
+```bash
+pre-commit install
+pre-commit run --all-files
+```
+
+## CI
+
+Workflow GitHub Actions запускается на каждый `push` и `pull_request`. Он
+устанавливает зависимости для разработки и выполняет `ruff check .`,
+`ruff format --check .` и `pytest` с изолированной SQLite БД.
 
 ## Примеры API-запросов
 

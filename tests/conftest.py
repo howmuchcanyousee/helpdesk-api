@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy.engine import make_url
 
 if TYPE_CHECKING:
     from app.models.comment import Comment
@@ -17,11 +18,30 @@ if TYPE_CHECKING:
 def pytest_configure() -> None:
     """Configure isolated application settings before test modules are imported."""
     test_database_url = os.getenv("TEST_DATABASE_URL", "sqlite+pysqlite://")
+    _validate_test_database_url(test_database_url, os.getenv("DATABASE_URL"))
     os.environ["DATABASE_URL"] = test_database_url
-    os.environ["DEBUG"] = "false"
+    os.environ["APP_DEBUG"] = "false"
     os.environ["SECRET_KEY"] = "test-secret-key-with-at-least-thirty-two-bytes"
     os.environ["ALGORITHM"] = "HS256"
     os.environ["ACCESS_TOKEN_EXPIRE_MINUTES"] = "30"
+
+
+def _validate_test_database_url(
+    test_database_url: str,
+    application_database_url: str | None,
+) -> None:
+    """Prevent destructive fixtures from targeting a non-test database."""
+    test_url = make_url(test_database_url)
+    if test_url.drivername.startswith("sqlite"):
+        return
+
+    if not test_url.database or not test_url.database.endswith("_test"):
+        raise pytest.UsageError(
+            "Non-SQLite TEST_DATABASE_URL database name must end with '_test'"
+        )
+
+    if application_database_url and test_url == make_url(application_database_url):
+        raise pytest.UsageError("TEST_DATABASE_URL must differ from DATABASE_URL")
 
 
 @dataclass(frozen=True)

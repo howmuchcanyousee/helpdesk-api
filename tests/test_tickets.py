@@ -1,5 +1,7 @@
 from collections.abc import Callable
 
+import pytest
+
 from app.models.ticket import Ticket, TicketPriority, TicketStatus
 from app.models.user import User, UserRole
 from tests.conftest import AuthenticatedClient
@@ -91,16 +93,65 @@ async def test_support_sees_all_tickets_and_updates_assignment_and_status(
     assert update_response.json()["assigned_to_id"] == support_client.user.id
 
 
-async def test_user_cannot_change_status_or_assign_ticket(
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"status": "resolved"},
+        {"assigned_to_id": 1},
+        {"priority": "critical"},
+    ],
+)
+async def test_user_cannot_change_restricted_ticket_fields(
+    payload: dict[str, object],
     user_client: AuthenticatedClient,
     support_user: User,
     ticket_factory: Callable[..., Ticket],
 ) -> None:
     ticket = ticket_factory(user_client.user)
+    if "assigned_to_id" in payload:
+        payload["assigned_to_id"] = support_user.id
     response = await user_client.client.patch(
         f"/tickets/{ticket.id}",
         headers=user_client.headers,
-        json={"status": "resolved", "assigned_to_id": support_user.id},
+        json=payload,
+    )
+
+    assert response.status_code == 403
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"title": "Forbidden"},
+        {"description": "Forbidden"},
+        {"priority": "critical"},
+    ],
+)
+async def test_support_cannot_change_user_or_admin_ticket_fields(
+    payload: dict[str, object],
+    support_client: AuthenticatedClient,
+    user: User,
+    ticket_factory: Callable[..., Ticket],
+) -> None:
+    ticket = ticket_factory(user)
+    response = await support_client.client.patch(
+        f"/tickets/{ticket.id}",
+        headers=support_client.headers,
+        json=payload,
+    )
+
+    assert response.status_code == 403
+
+
+async def test_user_cannot_edit_closed_ticket(
+    user_client: AuthenticatedClient,
+    ticket_factory: Callable[..., Ticket],
+) -> None:
+    ticket = ticket_factory(user_client.user, status=TicketStatus.CLOSED)
+    response = await user_client.client.patch(
+        f"/tickets/{ticket.id}",
+        headers=user_client.headers,
+        json={"title": "Forbidden"},
     )
 
     assert response.status_code == 403
@@ -125,29 +176,83 @@ async def test_admin_deletes_ticket(
     assert get_response.status_code == 404
 
 
+async def test_user_and_support_cannot_delete_tickets(
+    user_client: AuthenticatedClient,
+    support_client: AuthenticatedClient,
+    user_factory: Callable[[str, UserRole], User],
+    ticket_factory: Callable[..., Ticket],
+) -> None:
+    other_user = user_factory("other@example.com", UserRole.USER)
+    own_ticket = ticket_factory(user_client.user)
+    foreign_ticket = ticket_factory(other_user)
+
+    own_response = await user_client.client.delete(
+        f"/tickets/{own_ticket.id}",
+        headers=user_client.headers,
+    )
+    foreign_response = await user_client.client.delete(
+        f"/tickets/{foreign_ticket.id}",
+        headers=user_client.headers,
+    )
+    support_response = await support_client.client.delete(
+        f"/tickets/{own_ticket.id}",
+        headers=support_client.headers,
+    )
+
+    assert own_response.status_code == 403
+    assert foreign_response.status_code == 404
+    assert support_response.status_code == 403
+
+
 async def test_ticket_filters(
     support_client: AuthenticatedClient,
     user: User,
+    user_factory: Callable[[str, UserRole], User],
     ticket_factory: Callable[..., Ticket],
 ) -> None:
+    other_user = user_factory("other@example.com", UserRole.USER)
     matching_ticket = ticket_factory(
         user,
         status=TicketStatus.OPEN,
         priority=TicketPriority.HIGH,
         assigned_to=support_client.user,
     )
-    ticket_factory(user, status=TicketStatus.RESOLVED, priority=TicketPriority.LOW)
+    second_ticket = ticket_factory(
+        user,
+        status=TicketStatus.RESOLVED,
+        priority=TicketPriority.LOW,
+    )
+    ticket_factory(other_user, status=TicketStatus.CLOSED)
 
-    response = await support_client.client.get(
-        (
-            "/tickets?status=open&priority=high"
-            f"&author_id={user.id}&assigned_to_id={support_client.user.id}"
-        ),
-        headers=support_client.headers,
+    cases = [
+        ("status=open", {matching_ticket.id}),
+        ("priority=high", {matching_ticket.id}),
+        (f"author_id={user.id}", {matching_ticket.id, second_ticket.id}),
+        (f"assigned_to_id={support_client.user.id}", {matching_ticket.id}),
+    ]
+    for query, expected_ids in cases:
+        response = await support_client.client.get(
+            f"/tickets?{query}",
+            headers=support_client.headers,
+        )
+        assert response.status_code == 200
+        assert {ticket["id"] for ticket in response.json()} == expected_ids
+
+
+async def test_author_filter_cannot_bypass_user_scope(
+    user_client: AuthenticatedClient,
+    user_factory: Callable[[str, UserRole], User],
+    ticket_factory: Callable[..., Ticket],
+) -> None:
+    other_user = user_factory("other@example.com", UserRole.USER)
+    ticket_factory(other_user)
+
+    response = await user_client.client.get(
+        f"/tickets?author_id={other_user.id}",
+        headers=user_client.headers,
     )
 
-    assert response.status_code == 200
-    assert [ticket["id"] for ticket in response.json()] == [matching_ticket.id]
+    assert response.json() == []
 
 
 async def test_ticket_limit_and_offset(
@@ -177,3 +282,56 @@ async def test_ticket_requires_title_and_description(
     )
 
     assert response.status_code == 422
+
+
+@pytest.mark.parametrize("field", ["title", "description", "status", "priority"])
+async def test_ticket_patch_rejects_null_for_required_columns(
+    field: str,
+    admin_client: AuthenticatedClient,
+    user: User,
+    ticket_factory: Callable[..., Ticket],
+) -> None:
+    ticket = ticket_factory(user)
+    response = await admin_client.client.patch(
+        f"/tickets/{ticket.id}",
+        headers=admin_client.headers,
+        json={field: None},
+    )
+
+    assert response.status_code == 422
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"title": "   ", "description": "Description"},
+        {"title": "Title", "description": "   "},
+        {"title": "Title", "description": "Description", "priorty": "high"},
+    ],
+)
+async def test_ticket_rejects_blank_and_unknown_fields(
+    payload: dict[str, object],
+    user_client: AuthenticatedClient,
+) -> None:
+    response = await user_client.client.post(
+        "/tickets",
+        headers=user_client.headers,
+        json=payload,
+    )
+
+    assert response.status_code == 422
+
+
+async def test_support_cannot_assign_unknown_user(
+    support_client: AuthenticatedClient,
+    user: User,
+    ticket_factory: Callable[..., Ticket],
+) -> None:
+    ticket = ticket_factory(user)
+    response = await support_client.client.patch(
+        f"/tickets/{ticket.id}",
+        headers=support_client.headers,
+        json={"assigned_to_id": 999_999},
+    )
+
+    assert response.status_code == 404
