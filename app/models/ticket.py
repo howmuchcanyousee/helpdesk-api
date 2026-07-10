@@ -1,5 +1,6 @@
 from datetime import datetime
 from enum import StrEnum
+from typing import TYPE_CHECKING
 
 from sqlalchemy import DateTime, ForeignKey, String, Text, func
 from sqlalchemy import Enum as SqlEnum
@@ -7,6 +8,9 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
 from app.models.user import User
+
+if TYPE_CHECKING:
+    from app.models.comment import Comment
 
 
 class TicketStatus(StrEnum):
@@ -78,4 +82,8 @@ class Ticket(Base):
     assigned_to: Mapped[User | None] = relationship(
         back_populates="assigned_tickets",
         foreign_keys=[assigned_to_id],
+    )
+    comments: Mapped[list["Comment"]] = relationship(
+        back_populates="ticket",
+        cascade="all, delete-orphan",
     )

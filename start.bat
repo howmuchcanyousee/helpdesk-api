@@ -10,6 +10,13 @@ if errorlevel 1 (
     exit /b 1
 )
 
+docker info >nul 2>nul
+if errorlevel 1 (
+    echo Docker Engine is not running. Start Docker Desktop and try again.
+    pause
+    exit /b 1
+)
+
 docker compose version >nul 2>nul
 if errorlevel 1 (
     echo Docker Compose is not available. Update Docker Desktop and try again.
